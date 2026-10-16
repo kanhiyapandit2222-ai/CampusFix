@@ -1,0 +1,84 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && request.auth.token.admin == true;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    // Valid categories and priorities
+    function isValidCategory(cat) {
+      return cat in ['electrical', 'plumbing', 'it', 'civil', 'housekeeping', 'furniture', 'security', 'other'];
+    }
+
+    function isValidPriority(pri) {
+      return pri in ['low', 'medium', 'high'];
+    }
+
+    function isValidStatus(st) {
+      return st in ['pending', 'in-progress', 'resolved', 'rejected'];
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Users Profile Collection: /users/{userId}
+    // ─────────────────────────────────────────────────────────────
+    match /users/{userId} {
+      // User can read their own profile; admins can read any profile
+      allow read: if isOwner(userId) || isAdmin();
+
+      // Only the authenticated user can create their profile on registration.
+      // Must explicitly be a student. Clients CANNOT grant admin role.
+      allow create: if isOwner(userId)
+                    && request.resource.data.uid == userId
+                    && request.resource.data.role == 'student'
+                    && !('admin' in request.resource.data);
+
+      // Users can update their profile information (e.g. name, department)
+      // but CANNOT modify their role field.
+      allow update: if isOwner(userId)
+                    && request.resource.data.role == resource.data.role
+                    && !('admin' in request.resource.data);
+
+      // Profiles cannot be deleted by regular students
+      allow delete: if isAdmin();
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Complaints Collection: /complaints/{complaintId}
+    // ─────────────────────────────────────────────────────────────
+    match /complaints/{complaintId} {
+      // Students can only read their own complaints; Admins can read all complaints
+      allow read: if isAdmin() || (isAuthenticated() && resource.data.studentUid == request.auth.uid);
+
+      // Students can create a complaint associated strictly with their own UID
+      allow create: if isAuthenticated()
+                    && request.resource.data.studentUid == request.auth.uid
+                    && request.resource.data.status == 'pending'
+                    && isValidCategory(request.resource.data.category)
+                    && isValidPriority(request.resource.data.priority)
+                    && request.resource.data.title is string
+                    && request.resource.data.title.size() >= 8
+                    && request.resource.data.description is string
+                    && request.resource.data.description.size() >= 20;
+
+      // Status updates are strictly restricted to administrators
+      allow update: if isAdmin()
+                    && isValidStatus(request.resource.data.status)
+                    && request.resource.data.studentUid == resource.data.studentUid
+                    && request.resource.data.createdAt == resource.data.createdAt;
+
+      // Deletion is strictly reserved for administrators
+      allow delete: if isAdmin();
+    }
+  }
+}
